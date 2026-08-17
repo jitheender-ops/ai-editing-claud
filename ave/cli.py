@@ -219,6 +219,70 @@ def edit(
     typer.echo("import it with:  Resolve -> File -> Import -> Timeline")
 
 
+@app.command("reference")
+def reference_add(
+    path: Path = typer.Argument(..., help="Reference video to study."),
+    name: str = typer.Option(..., "--name", help="Name to save the style under."),
+    category: str = typer.Option(None, help="Free-text category, e.g. 'tech'."),
+    threshold: float = typer.Option(27.0, help="Shot detection sensitivity. Lower = more cuts."),
+) -> None:
+    """Measure a reference video's editing style and save it to the style library."""
+    from ave.database.queries import upsert_style
+    from ave.media.ffmpeg import make_proxy, probe, summarise
+    from ave.media.hash import content_hash
+    from ave.reference.analyze import analyse_reference
+
+    path = path.expanduser().resolve()
+    if not path.exists():
+        typer.echo(f"no such file: {path}")
+        raise typer.Exit(1)
+
+    config.ensure_dirs()
+    get_db()
+
+    digest = content_hash(path)
+    probed = probe(path)
+    probed["summary"] = summarise(probed)
+
+    typer.echo(f"analysing {path.name} ...")
+    proxy, _ = make_proxy(path, digest)
+
+    dna = analyse_reference(
+        source_path=path,
+        proxy_path=proxy,
+        probe=probed,
+        style_name=name,
+        content_hash=digest,
+        threshold=threshold,
+    )
+    upsert_style(name, dna.model_dump(mode="json"), category=category)
+
+    pacing = dna.pacing
+    typer.echo(f"\nstyle '{name}' saved")
+    typer.echo("\npacing")
+    typer.echo(f"  average shot        {pacing.average_shot_duration_s:.2f}s")
+    typer.echo(f"  median shot         {pacing.median_shot_duration_s:.2f}s")
+    typer.echo(f"  cuts per minute     {pacing.cuts_per_minute:.1f}")
+    typer.echo(f"  dead-air tolerance  {pacing.dead_air_tolerance_s:.2f}s")
+    typer.echo("\naudio / colour")
+    typer.echo(f"  loudness            {dna.audio.integrated_lufs:.1f} LUFS")
+    typer.echo(f"  saturation          {dna.color.saturation_mean:.2f}")
+    typer.echo(f"  contrast            {dna.color.contrast:.2f}")
+    typer.echo(f"  warmth              {dna.color.temperature_bias:+.3f}")
+
+    typer.echo("\nconfidence")
+    for section, value in sorted(dna.confidence.items()):
+        bar = "#" * int(value * 20)
+        typer.echo(f"  {section:<12} {value:.2f}  {bar}")
+
+    if dna.notes:
+        typer.echo("\nwhat this profile does NOT know")
+        for note in dna.notes:
+            typer.echo(f"  - {note}")
+
+    typer.echo(f"\napply it with:  ave edit <footage> --style {name}")
+
+
 @app.command()
 def plans(project: str = typer.Argument(..., help="Project name.")) -> None:
     """List every version of a project's plan. Nothing is ever overwritten."""

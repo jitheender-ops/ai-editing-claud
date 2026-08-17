@@ -38,7 +38,9 @@ name = "ave"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "opencv-python-headless" },
     { name = "pydantic" },
+    { name = "scenedetect" },
     { name = "typer" },
 ]
 
@@ -60,9 +62,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mlx-whisper", marker = "extra == 'transcribe'", specifier = ">=0.4" },
+    { name = "opencv-python-headless", specifier = ">=5.0.0.93" },
     { name = "opencv-python-headless", marker = "extra == 'vision'", specifier = ">=4.10" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pyobjc-framework-vision", marker = "extra == 'vision'", specifier = ">=10.3" },
+    { name = "scenedetect", specifier = ">=0.7.1" },
     { name = "scenedetect", marker = "extra == 'vision'", specifier = ">=0.6.4" },
     { name = "typer", specifier = ">=0.15" },
 ]

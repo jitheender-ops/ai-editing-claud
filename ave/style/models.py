@@ -75,6 +75,17 @@ class Audio(BaseModel):
     sfx_per_minute: float = Field(default=0.0, ge=0)
 
 
+class Color(BaseModel):
+    """Normalised so the numbers are comparable between references rather than
+    tied to one codec's levels."""
+
+    saturation_mean: float = Field(default=0.4, ge=0, le=1)
+    contrast: float = Field(default=0.5, ge=0)
+    #: Positive is warm (red-biased), negative is cool.
+    temperature_bias: float = Field(default=0.0)
+    look: Literal["natural", "cinematic"] = "natural"
+
+
 class Transitions(BaseModel):
     #: Modern fast-paced editing is hard cuts, and Resolve's scripting API cannot
     #: add a transition at all, so "minimal" is both the common case and the one
@@ -92,6 +103,7 @@ class EditDNA(BaseModel):
     motion: Motion = Field(default_factory=Motion)
     captions: Captions = Field(default_factory=Captions)
     audio: Audio = Field(default_factory=Audio)
+    color: Color = Field(default_factory=Color)
     transitions: Transitions = Field(default_factory=Transitions)
 
     #: Per-section, 0..1. A section absent here has not been measured at all.
