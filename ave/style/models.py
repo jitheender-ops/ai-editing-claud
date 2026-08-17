@@ -55,8 +55,11 @@ class Pacing(BaseModel):
 
 class Motion(BaseModel):
     punch_in_rate_per_minute: float = Field(default=0.0, ge=0)
+    #: The scale range a punch-in travels through. 1.0 is the untouched frame.
     zoom_range: tuple[float, float] = (1.0, 1.15)
-    static_vs_moving_ratio: float = Field(default=1.0, ge=0)
+    pan_rate_per_minute: float = Field(default=0.0, ge=0)
+    #: Fraction of the runtime with no camera or digital movement at all.
+    static_ratio: float = Field(default=1.0, ge=0, le=1)
 
 
 class Captions(BaseModel):

@@ -73,12 +73,8 @@ def analyse_reference(
     colour, colour_confidence = _measure_colour(visual, notes)
     confidence["color"] = colour_confidence
 
-    motion = Motion()
-    confidence["motion"] = 0.0
-    notes.append(
-        "Motion is not decomposed into zoom and pan — that needs affine estimation "
-        "between sampled frames, which is not implemented yet. Treat zoom_range as a default."
-    )
+    motion, motion_confidence = _measure_motion(visual, duration, notes)
+    confidence["motion"] = motion_confidence
     notes.append(
         "Caption style, font and SFX identity are not measured. Font family is not "
         "recoverable from a rendered video at any effort; an SFX can be classified by "
@@ -237,6 +233,49 @@ def _measure_colour(visual: Path, notes: list[str], samples: int = 24) -> tuple[
         ),
         0.7,
     )
+
+
+def _measure_motion(visual: Path, duration_s: float, notes: list[str]) -> tuple[Motion, float]:
+    """Zoom and pan behaviour, by affine estimation between sampled frames."""
+    from ave.media.motion import ZOOM_EPSILON, analyse_motion
+
+    profile = analyse_motion(visual)
+    if not profile.measured:
+        notes.append(
+            "Motion could not be measured — too few frames could be tracked. Flat or "
+            "featureless footage (slides, solid backgrounds) genuinely has nothing to "
+            "track, so zoom_range is a default rather than an observation."
+        )
+        return Motion(), 0.0
+
+    # Contiguous runs of zooming samples are one punch-in each, not one per frame.
+    events = 0
+    inside = False
+    for sample in profile.samples:
+        zooming = abs(sample.scale - 1.0) > ZOOM_EPSILON
+        if zooming and not inside:
+            events += 1
+        inside = zooming
+
+    minutes = (duration_s / 60) if duration_s else 0.0
+    seconds_per_event = (duration_s * profile.zoom_frequency / events) if events else 0.0
+    # A punch-in's total travel is its rate times how long it runs. Clamped: an
+    # estimate outside this range is telling us about tracking noise, not style.
+    travel = min(0.4, max(0.02, profile.zoom_magnitude * seconds_per_event)) if events else 0.0
+
+    motion = Motion(
+        punch_in_rate_per_minute=round(events / minutes, 2) if minutes else 0.0,
+        zoom_range=(1.0, round(1.0 + travel, 3)) if events else (1.0, 1.0),
+        pan_rate_per_minute=round(profile.pan_frequency * len(profile.samples) / minutes, 2)
+        if minutes
+        else 0.0,
+        static_ratio=profile.static_ratio,
+    )
+    if not events:
+        notes.append("No zooms or punch-ins were detected in this reference.")
+
+    # Coverage is how much of the footage the estimate actually rests on.
+    return motion, round(min(1.0, profile.coverage * min(1.0, len(profile.samples) / 40)), 2)
 
 
 def _measure_transitions(

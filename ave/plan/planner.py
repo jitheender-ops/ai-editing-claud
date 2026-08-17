@@ -27,9 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ave.lib.ids import new_id
+from ave.lib.rng import rng
 from ave.media.ffmpeg import summarise
 from ave.media.silence import Range, detect_silence, measure_loudness, speech_ranges
-from ave.plan.models import EDL, Clip, Marker, Summary, Timebase, Track
+from ave.plan.models import EDL, Clip, Marker, Op, Summary, Timebase, Track
 from ave.style.models import EditDNA
 
 PLANNER_VERSION = "1.0"
@@ -184,7 +185,72 @@ def plan_cut(inputs: PlanInputs) -> EDL:
             diagnostics=diagnostics,
         ),
     )
+    add_punch_ins(edl, dna, seed=inputs.seed)
     return edl
+
+
+def add_punch_ins(edl: EDL, dna: EditDNA, *, seed: int) -> int:
+    """Apply the style's punch-in behaviour to the cut.
+
+    Two properties matter here and both come from decisions made earlier.
+
+    It is reproducible: every random choice — which clips, how much zoom — is
+    drawn from `random.Random(seed)` with the seed stored on the plan, so
+    regenerating a version reproduces it exactly rather than merely similarly.
+
+    And it is self-limiting: the confidence of each operation is inherited from
+    how well motion was actually measured in the reference. A style derived from
+    footage where motion could not be tracked produces punch-ins below the
+    approval floor, so they queue for a human instead of being applied on the
+    strength of a guess. Nothing extra is needed to get that behaviour — the
+    validation gate already does it.
+    """
+    motion = dna.motion
+    if motion.punch_in_rate_per_minute <= 0:
+        return 0
+
+    clips = edl.all_clips()
+    if not clips:
+        return 0
+
+    timebase = edl.timebase
+    minutes = timebase.frames_to_seconds(
+        sum(c.duration_frames for c in clips)
+    ) / 60
+    wanted = int(round(motion.punch_in_rate_per_minute * minutes))
+    if wanted <= 0:
+        return 0
+
+    generator = rng(seed)
+    low, high = motion.zoom_range
+    confidence = dna.confidence_of("motion")
+
+    # Longest clips first: a punch-in needs room to be read as a choice rather
+    # than a glitch. Ties broken by id so the order never depends on dict
+    # iteration or on which clips happen to be equal length.
+    candidates = sorted(clips, key=lambda c: (-c.duration_frames, c.id))[:wanted]
+
+    added = 0
+    for clip in candidates:
+        # Jitter so a run of punch-ins is not mechanically identical, which reads
+        # as an automated effect rather than an edit.
+        value = round(generator.uniform(low, high), 4)
+        if value <= 1.0:
+            continue
+        clip.ops.append(
+            Op(
+                id=new_id("op"),
+                type="zoom",
+                params={"value": value},
+                confidence=confidence,
+                priority=10,
+                source="rule",
+                reasons=[],
+            )
+        )
+        added += 1
+
+    return added
 
 
 def inputs_hash(inputs: PlanInputs) -> str:
