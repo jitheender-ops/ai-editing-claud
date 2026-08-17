@@ -1,0 +1,70 @@
+name: nightly research
+
+# Runs on GitHub's runners, not the laptop. On a public repo the minutes are free
+# and unlimited, and it works with the Mac shut. Results are committed back, so
+# the Mac collects them with `git pull` whenever it is next on.
+#
+# Cron on Actions is best-effort and can be delayed at peak times. That is fine
+# for research and must never be relied on for anything time-critical.
+on:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC — off the hour, where the queues are shorter
+  workflow_dispatch: {}
+
+# Least privilege: the job needs to push its digest and nothing else.
+permissions:
+  contents: write
+
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Hoisted to a job-level env var rather than tested directly in a step `if`:
+      # the `secrets` context is not dependably available in step conditions, and
+      # a silently-false condition would skip the sync without saying so.
+      HAS_RCLONE: ${{ secrets.RCLONE_CONF != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No pip install step: nightly.py is standard library only, so there is
+      # nothing to resolve and nothing to break.
+      - name: Gather research
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python ave/research/nightly.py
+
+      # Push asset bytes to Google One only when a token is configured. Note this
+      # must be an rclone OAuth refresh token for your own account: a GCP service
+      # account cannot spend Google One quota, because the uploader owns the file
+      # and a service account only has its own 15 GB.
+      - name: Sync assets to Google One
+        if: env.HAS_RCLONE == 'true'
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          printf '%s' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          rclone copy research/assets.json gdrive:ave/manifests/ --no-update-modtime
+
+      - name: Commit the digest
+        run: |
+          git config user.name  "ave-research"
+          git config user.email "ave-research@users.noreply.github.com"
+          git add research/
+          # No changes is a normal outcome, not a failure.
+          if git diff --staged --quiet; then
+            echo "nothing new to commit"
+            exit 0
+          fi
+          git commit -m "research: digest $(date -u +%Y-%m-%d)"
+          git push
