@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Local state lives in ~/Library/Application Support/ave, never in the repo.
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets. The .env.example is the committed one.
+.env

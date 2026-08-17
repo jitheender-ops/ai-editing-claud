@@ -1,0 +1,30 @@
+[project]
+name = "ave"
+version = "0.1.0"
+description = "AI editing intelligence system — reference video in, DaVinci Resolve timeline out"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.9",
+    "typer>=0.15",
+]
+
+# Heavy, opt-in extras. Nothing here is needed for M0 ingest or `ave doctor`.
+[project.optional-dependencies]
+transcribe = ["mlx-whisper>=0.4"]
+vision = ["opencv-python-headless>=4.10", "scenedetect>=0.6.4", "pyobjc-framework-Vision>=10.3"]
+
+[project.scripts]
+ave = "ave.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ave"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

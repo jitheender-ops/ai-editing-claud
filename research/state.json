@@ -1,0 +1,29 @@
+{
+  "upstream": {
+    "AcademySoftwareFoundation/OpenTimelineIO": {
+      "at": "",
+      "id": "v0.18.1",
+      "kind": "tag"
+    },
+    "Breakthrough/PySceneDetect": {
+      "at": "2026-07-22",
+      "id": "v0.7.1",
+      "kind": "release"
+    },
+    "WheheoHu/pybmd": {
+      "at": "2026-07-10",
+      "id": "v2026.2.0",
+      "kind": "release"
+    },
+    "WyattBlue/auto-editor": {
+      "at": "2026-08-13",
+      "id": "31.5.0",
+      "kind": "release"
+    },
+    "ml-explore/mlx-examples": {
+      "at": "2026-04-06",
+      "id": "2026-04-06T18:56:05Z",
+      "kind": "push"
+    }
+  }
+}
