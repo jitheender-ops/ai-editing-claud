@@ -136,6 +136,7 @@ def edit(
         get_style, next_plan_version, save_approvals, save_plan, upsert_project,
     )
     from ave.executors.fcpxml import write_fcpxml
+    from ave.executors.resolve_plan import write_plan
     from ave.media.ffmpeg import probe, summarise
     from ave.media.hash import content_hash
     from ave.plan.planner import PlanInputs, plan_cut
@@ -215,8 +216,10 @@ def edit(
 
     out = config.BUILD_DIR / f"{name}_v{version:03d}.fcpxml"
     write_fcpxml(edl, out)
+    write_plan(edl, config.BUILD_DIR / f"{name}_v{version:03d}.plan.json")
     typer.echo(f"\nwrote {out}")
     typer.echo("import it with:  Resolve -> File -> Import -> Timeline")
+    typer.echo("or, inside Resolve:  Workspace -> Scripts -> AVE_Build_Timeline")
 
 
 @app.command("reference")
@@ -293,6 +296,7 @@ def tweak(
         get_plan, get_project, next_plan_version, save_approvals, save_plan,
     )
     from ave.executors.fcpxml import write_fcpxml
+    from ave.executors.resolve_plan import write_plan
     from ave.media.ffmpeg import probe, summarise
     from ave.plan.feedback import apply_feedback
     from ave.plan.models import EDL
@@ -377,7 +381,32 @@ def tweak(
 
     out = config.BUILD_DIR / f"{project}_v{version:03d}.fcpxml"
     write_fcpxml(edl, out)
+    write_plan(edl, config.BUILD_DIR / f"{project}_v{version:03d}.plan.json")
     typer.echo(f"\nwrote {out}")
+
+
+@app.command("install-resolve-script")
+def install_resolve_script() -> None:
+    """Install the companion script into Resolve's Scripts menu (tier 2).
+
+    Works on the free edition: a script in this folder runs inside Resolve's own
+    Python, which is not "external scripting" and so is not Studio-gated.
+    """
+    import shutil
+
+    source = config.REPO_ROOT / "resolve_scripts" / "AVE_Build_Timeline.py"
+    if not source.exists():
+        typer.echo(f"missing {source}")
+        raise typer.Exit(1)
+
+    target_dir = config.RESOLVE_USER_SCRIPTS
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source.name
+    shutil.copy2(source, target)
+
+    typer.echo(f"installed {target}")
+    typer.echo("\nin Resolve:  Workspace -> Scripts -> AVE_Build_Timeline")
+    typer.echo("it builds the newest plan as a NEW timeline; existing ones are untouched.")
 
 
 @app.command()
