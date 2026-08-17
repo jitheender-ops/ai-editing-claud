@@ -122,3 +122,166 @@ def save_analysis(
         _now(),
     )
     return analysis_id
+
+
+# ── styles ───────────────────────────────────────────────────────────────────
+
+
+def upsert_style(name: str, dna: dict[str, Any], *, category: str | None = None) -> str:
+    """Styles are versioned by row, never overwritten — an edit built against
+    version 2 must still be reproducible after version 3 exists."""
+    row = get_db().get(
+        "SELECT * FROM styles WHERE name = ? ORDER BY version DESC LIMIT 1", name
+    )
+    version = (row["version"] + 1) if row else 1
+    style_id = new_id("sty")
+    get_db().run(
+        """INSERT INTO styles (id, name, version, parent_id, dna, dna_schema_version,
+                               category, tags, source_media_ids, confidence, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)""",
+        style_id,
+        name,
+        version,
+        row["id"] if row else None,
+        json.dumps(dna),
+        dna.get("schema_version", "1.0"),
+        category,
+        json.dumps(dna.get("derived_from", [])),
+        json.dumps(dna.get("confidence", {})),
+        _now(),
+    )
+    return style_id
+
+
+def get_style(name: str, version: int | None = None) -> dict[str, Any] | None:
+    if version is None:
+        row = get_db().get(
+            "SELECT * FROM styles WHERE name = ? ORDER BY version DESC LIMIT 1", name
+        )
+    else:
+        row = get_db().get("SELECT * FROM styles WHERE name = ? AND version = ?", name, version)
+    return {**row, "dna": json.loads(row["dna"])} if row else None
+
+
+def list_styles() -> list[dict[str, Any]]:
+    rows = get_db().all(
+        """SELECT * FROM styles WHERE (name, version) IN
+             (SELECT name, MAX(version) FROM styles GROUP BY name)
+           ORDER BY name"""
+    )
+    return [{**r, "dna": json.loads(r["dna"])} for r in rows]
+
+
+# ── projects and plans ───────────────────────────────────────────────────────
+
+
+def upsert_project(
+    name: str, *, style_id: str | None = None, footage_dir: str | None = None,
+    target: dict[str, Any] | None = None, autonomy: int = 2,
+) -> str:
+    existing = get_db().get("SELECT * FROM projects WHERE name = ?", name)
+    if existing:
+        return existing["id"]
+    project_id = new_id("prj")
+    get_db().run(
+        """INSERT INTO projects (id, name, style_id, footage_dir, target, autonomy, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        project_id,
+        name,
+        style_id,
+        footage_dir,
+        json.dumps(target or {}),
+        autonomy,
+        _now(),
+    )
+    return project_id
+
+
+def get_project(name: str) -> dict[str, Any] | None:
+    row = get_db().get("SELECT * FROM projects WHERE name = ?", name)
+    return {**row, "target": json.loads(row["target"])} if row else None
+
+
+def next_plan_version(project_id: str) -> int:
+    row = get_db().get(
+        "SELECT MAX(version) AS v FROM plans WHERE project_id = ?", project_id
+    )
+    return (row["v"] or 0) + 1 if row else 1
+
+
+def save_plan(
+    *, project_id: str, version: int, seed: int, edl: dict[str, Any],
+    qc: dict[str, Any] | None, origin: str, run_id: str,
+    origin_detail: str | None = None, parent_version: int | None = None,
+) -> str:
+    """Plans are append-only. Nothing here ever updates a previous version, which
+    is what makes every earlier edit recoverable."""
+    plan_id = new_id("pln")
+    get_db().run(
+        """INSERT INTO plans (id, project_id, version, parent_version, seed, edl, qc,
+                              origin, origin_detail, run_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        plan_id,
+        project_id,
+        version,
+        parent_version,
+        seed,
+        json.dumps(edl),
+        json.dumps(qc) if qc else None,
+        origin,
+        origin_detail,
+        run_id,
+        _now(),
+    )
+    return plan_id
+
+
+def get_plan(project_id: str, version: int) -> dict[str, Any] | None:
+    row = get_db().get(
+        "SELECT * FROM plans WHERE project_id = ? AND version = ?", project_id, version
+    )
+    if not row:
+        return None
+    return {**row, "edl": json.loads(row["edl"]), "qc": json.loads(row["qc"]) if row["qc"] else None}
+
+
+def list_plans(project_id: str) -> list[dict[str, Any]]:
+    rows = get_db().all(
+        "SELECT id, version, parent_version, origin, origin_detail, created_at "
+        "FROM plans WHERE project_id = ? ORDER BY version",
+        project_id,
+    )
+    return rows
+
+
+# ── approvals ────────────────────────────────────────────────────────────────
+
+
+def save_approvals(plan_id: str, ops: list[dict[str, Any]]) -> int:
+    for op in ops:
+        get_db().run(
+            """INSERT INTO approvals (id, plan_id, op_id, reasons, state, created_at)
+               VALUES (?, ?, ?, ?, 'PENDING', ?)""",
+            new_id("apr"),
+            plan_id,
+            op["id"],
+            json.dumps(op.get("reasons", [])),
+            _now(),
+        )
+    return len(ops)
+
+
+def list_approvals(state: str = "PENDING") -> list[dict[str, Any]]:
+    rows = get_db().all(
+        "SELECT * FROM approvals WHERE state = ? ORDER BY created_at DESC", state
+    )
+    return [{**r, "reasons": json.loads(r["reasons"])} for r in rows]
+
+
+def set_approval_state(approval_id: str, state: str) -> bool:
+    return get_db().run(
+        "UPDATE approvals SET state = ?, decided_at = ? WHERE id = ? AND state = 'PENDING'",
+        state,
+        _now(),
+        approval_id,
+    ) > 0

@@ -4,9 +4,14 @@ Study a reference video, measure how it is edited, apply that style to your own
 footage, and build the result as a DaVinci Resolve timeline. Every decision is
 explainable and every version is kept.
 
-**Status: M0 complete.** Ingest, proxies, the analysis cache, the job queue, the
-Resolve capability probe and the nightly research bot all work. No editing yet —
-that is M1.
+**Status: M1 complete — it edits.** Point it at a video and it produces a cut
+timeline that Resolve imports. Ingest, proxies, the analysis cache, the job
+queue, the Resolve capability probe, the nightly research bot, the cut planner,
+the operation validation gate, quality control and the FCPXML writer all work.
+88 tests, no network and no sleeping in any of them.
+
+Not yet: captions (M2), measuring a real reference video (M3), B-roll (M7).
+Cuts are driven by silence today; the transcript layer arrives with M3.
 
 ## The three decisions that shape everything
 
@@ -36,12 +41,47 @@ answer "why is this cut here?" with a rule id and its inputs.
 ```bash
 uv run ave doctor                      # what this machine can and cannot do
 uv run ave ingest ~/Movies/MyFootage   # index, hash, build 480p proxies
-uv run ave media                       # what is indexed
-uv run pytest -q                       # 38 tests, no network, no sleeping
+uv run ave edit ~/Movies/talk.mov      # plan a cut and write a Resolve timeline
+uv run ave plans talk                  # every version, never overwritten
+uv run ave approvals                   # what the planner wasn't sure about
+uv run pytest -q                       # 88 tests
+```
+
+A real run:
+
+```
+3 clips  10.0s -> 6.5s  (3.5s removed, 65% kept)
+
+quality report (confidence 1.00)
+  clean
+
+wrote ~/Library/Application Support/ave/builds/demo_v001.fcpxml
+import it with:  Resolve -> File -> Import -> Timeline
 ```
 
 Re-running `ingest` on an unchanged folder does no work — that is asserted in the
 test suite, and it is what keeps a fanless MacBook Air out of thermal throttle.
+
+### Nothing is silently applied or silently dropped
+
+Every operation passes one gate — `schema → media → bounds → conflict →
+confidence → autonomy`, worst decision wins — and comes out `ALLOW`, `DENY` or
+`REQUIRE_APPROVAL`, carrying the full reason trail that produced that verdict.
+Uncertain operations go to `ave approvals` rather than being applied on a
+coin-flip or quietly discarded. Only `ALLOW`-ed operations reach the timeline
+file.
+
+The same idea runs through the failure paths. An empty plan does not say "no
+clips found"; it measures the audio and tells you *why*:
+
+> The entire source is silent: integrated loudness is -70 LUFS (anything below
+> about -60 is digital silence). This footage has no audio to cut on.
+
+And each cut's reason is written into the Resolve timeline as a marker, so it is
+readable while scrubbing:
+
+> Kept 2.26s of speech; 1.74s of silence removed before it (style dead-air
+> tolerance 0.35s)
 
 ## Keeping the Mac cool
 
@@ -77,17 +117,36 @@ Two things worth knowing before wiring the sync:
 ave/lib/         ids, seeded rng, structured logs, power policy
 ave/database/    narrow adapter (the Postgres seam), schema, all SQL
 ave/jobs/        durable queue: backoff, dead-letter, resumable
-ave/media/       ffmpeg, content hashing, ingest
-ave/executors/   Resolve capability probe; FCPXML writer lands in M1
+ave/media/       ffmpeg, content hashing, silence/loudness, ingest
+ave/style/       Edit DNA — a style as numbers, each with a confidence
+ave/plan/        the EDL schema and the deterministic cut planner
+ave/policies/    the one validation gate every operation passes
+ave/qc/          quality control on a plan, before anything is written
+ave/executors/   FCPXML writer; Resolve capability probe
 ave/research/    the nightly bot
 ```
 
-Several primitives — the queue, the database seam, the governance idea that
-becomes the op validation gate in M1 — are ported from the sibling `commerce-os`
-project rather than rewritten.
+Several primitives — the queue, the database seam, and the governance pipeline
+that became the operation validation gate — are ported from the sibling
+`commerce-os` project rather than rewritten.
 
-## What's next (M1)
+## Two deviations worth knowing
 
-auto-editor first pass → word-level transcript → cut planner honouring the
-style's dead-air tolerance → Edit Decision List → validation gate → FCPXML you
-import into Resolve.
+**auto-editor is not used.** The plan was to shell out to it for the first-pass
+cut. `ffmpeg silencedetect` turned out to do that job in about forty lines with
+no new dependency, and it is already installed. auto-editor stays interesting for
+its *motion*-based cutting, which is a genuinely different signal, but it is not
+needed to make cuts from silence.
+
+**The Edit DNA is honest about what it has not measured.** `default_dna()`
+returns neutral numbers with zero confidence and a `notes` list saying exactly
+that. Nothing in the system has analysed a reference video yet, so nothing
+pretends to have.
+
+## What's next (M3, and it needs you)
+
+The highest-severity open risk is FCPXML import fidelity, and it needs ten
+minutes at the keyboard rather than more code: build a short timeline in Resolve
+containing a cut, a dissolve, a punch-in and a marker, export it as FCPXML 1.10,
+and drop it in `tests/golden/`. That pins Resolve's real dialect and turns the
+writer's correctness from reasoned to verified.

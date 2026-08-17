@@ -18,7 +18,7 @@ from ave.database.adapter import get_db
 from ave.database.queries import count_media, list_media
 from ave.lib import power
 from ave.lib.ids import new_run_id
-from ave.lib.log import set_run_id
+from ave.lib.log import get_run_id, set_run_id
 from ave.media.ffmpeg import summarise
 
 app = typer.Typer(add_completion=False, help="AI editing intelligence system.")
@@ -120,6 +120,167 @@ def media_list(kind: str = typer.Option(None, help="Filter by kind.")) -> None:
             f"{row['id']}  {info['duration_s']:>7.1f}s  {info['width']}x{info['height']}"
             f"  {fps:>6.2f}fps  {row['kind']:<9}  {Path(row['path']).name}"
         )
+
+
+@app.command()
+def edit(
+    path: Path = typer.Argument(..., help="Media file to edit."),
+    project: str = typer.Option(None, help="Project name. Defaults to the file's name."),
+    style: str = typer.Option(None, help="Style to apply. Defaults to neutral defaults."),
+    noise: float = typer.Option(-30.0, help="Silence threshold in dBFS. Lower = stricter."),
+    seed: int = typer.Option(0, help="Seed. The same seed reproduces the plan exactly."),
+    autonomy: int = typer.Option(2, help="1 propose | 2 build and flag | 3 autonomous"),
+) -> None:
+    """Plan a cut from silence, validate it, and write a Resolve-importable timeline."""
+    from ave.database.queries import (
+        get_style, next_plan_version, save_approvals, save_plan, upsert_project,
+    )
+    from ave.executors.fcpxml import write_fcpxml
+    from ave.media.ffmpeg import probe, summarise
+    from ave.media.hash import content_hash
+    from ave.plan.planner import PlanInputs, plan_cut
+    from ave.policies.validate import validate_edl
+    from ave.qc.validate import run_qc
+    from ave.style.models import EditDNA, default_dna
+
+    path = path.expanduser().resolve()
+    if not path.exists():
+        typer.echo(f"no such file: {path}")
+        raise typer.Exit(1)
+
+    config.ensure_dirs()
+    get_db()
+
+    dna = default_dna()
+    if style:
+        row = get_style(style)
+        if not row:
+            typer.echo(f"unknown style: {style}  (try `ave styles`)")
+            raise typer.Exit(1)
+        dna = EditDNA.model_validate(row["dna"])
+
+    name = project or path.stem
+    project_id = upsert_project(name, footage_dir=str(path.parent), autonomy=autonomy)
+    version = next_plan_version(project_id)
+
+    probed = probe(path)
+    probed["summary"] = summarise(probed)
+
+    typer.echo(f"planning {path.name} with style '{dna.style_name}' ...")
+    edl = plan_cut(
+        PlanInputs(
+            media_id=content_hash(path),
+            path=str(path),
+            probe=probed,
+            dna=dna,
+            project=name,
+            version=version,
+            seed=seed,
+            noise_db=noise,
+        )
+    )
+
+    validation = validate_edl(edl, dna, autonomy=autonomy)
+    if not validation.ok:
+        for clip_id, message in validation.clip_errors:
+            typer.echo(f"  ERROR  {clip_id}: {message}")
+        raise typer.Exit(1)
+
+    qc = run_qc(edl)
+
+    plan_id = save_plan(
+        project_id=project_id,
+        version=version,
+        seed=seed,
+        edl=edl.model_dump(mode="json"),
+        qc=qc.to_dict(),
+        origin="generate",
+        run_id=get_run_id(),
+    )
+    if pending := edl.pending_approval():
+        save_approvals(plan_id, [op.model_dump(mode="json") for op in pending])
+
+    summary = edl.summary
+    typer.echo(
+        f"\n{summary.clip_count} clips  "
+        f"{summary.source_duration_s:.1f}s -> {summary.output_duration_s:.1f}s  "
+        f"({summary.removed_s:.1f}s removed, {summary.kept_ratio:.0%} kept)"
+    )
+    typer.echo(f"\nquality report (confidence {qc.confidence:.2f})")
+    typer.echo(qc.render())
+
+    if not qc.ok:
+        typer.echo("\nnot writing a timeline while there are errors")
+        raise typer.Exit(1)
+
+    out = config.BUILD_DIR / f"{name}_v{version:03d}.fcpxml"
+    write_fcpxml(edl, out)
+    typer.echo(f"\nwrote {out}")
+    typer.echo("import it with:  Resolve -> File -> Import -> Timeline")
+
+
+@app.command()
+def plans(project: str = typer.Argument(..., help="Project name.")) -> None:
+    """List every version of a project's plan. Nothing is ever overwritten."""
+    from ave.database.queries import get_project, list_plans
+
+    get_db()
+    row = get_project(project)
+    if not row:
+        typer.echo(f"unknown project: {project}")
+        raise typer.Exit(1)
+    for plan in list_plans(row["id"]):
+        detail = f"  {plan['origin_detail']}" if plan["origin_detail"] else ""
+        typer.echo(
+            f"v{plan['version']:03d}  {plan['created_at']}  {plan['origin']}{detail}"
+        )
+
+
+@app.command()
+def styles() -> None:
+    """List saved styles."""
+    from ave.database.queries import list_styles
+
+    get_db()
+    rows = list_styles()
+    if not rows:
+        typer.echo("no styles saved — edits will use neutral defaults")
+        return
+    for row in rows:
+        pacing = row["dna"].get("pacing", {})
+        typer.echo(
+            f"{row['name']:<24} v{row['version']}  "
+            f"dead-air {pacing.get('dead_air_tolerance_s', '?')}s  "
+            f"{row['category'] or '-'}"
+        )
+
+
+@app.command()
+def approvals(
+    approve: str = typer.Option(None, help="Approval id to approve."),
+    reject: str = typer.Option(None, help="Approval id to reject."),
+) -> None:
+    """Operations the planner was not confident enough to apply unreviewed."""
+    from ave.database.queries import list_approvals, set_approval_state
+
+    get_db()
+    if approve or reject:
+        target, state = (approve, "APPROVED") if approve else (reject, "REJECTED")
+        if set_approval_state(target, state):
+            typer.echo(f"{target} -> {state}")
+        else:
+            typer.echo(f"{target} is not pending")
+            raise typer.Exit(1)
+        return
+
+    pending = list_approvals()
+    if not pending:
+        typer.echo("nothing awaiting approval")
+        return
+    for row in pending:
+        typer.echo(f"{row['id']}  op {row['op_id']}")
+        for reason in row["reasons"]:
+            typer.echo(f"    [{reason['rule_id']}] {reason['message']}")
 
 
 @app.command()
