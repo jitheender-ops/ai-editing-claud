@@ -284,6 +284,103 @@ def reference_add(
 
 
 @app.command()
+def tweak(
+    project: str = typer.Argument(..., help="Project to adjust."),
+    command: str = typer.Argument(..., help='e.g. "make it faster", "reduce zooms by 50%"'),
+) -> None:
+    """Adjust the latest plan with a natural-language instruction, as a new version."""
+    from ave.database.queries import (
+        get_plan, get_project, next_plan_version, save_approvals, save_plan,
+    )
+    from ave.executors.fcpxml import write_fcpxml
+    from ave.media.ffmpeg import probe, summarise
+    from ave.plan.feedback import apply_feedback
+    from ave.plan.models import EDL
+    from ave.plan.planner import PlanInputs, plan_cut
+    from ave.policies.validate import validate_edl
+    from ave.qc.validate import run_qc
+    from ave.style.models import EditDNA, default_dna
+
+    config.ensure_dirs()
+    get_db()
+
+    row = get_project(project)
+    if not row:
+        typer.echo(f"unknown project: {project}")
+        raise typer.Exit(1)
+
+    latest = next_plan_version(row["id"]) - 1
+    if latest < 1:
+        typer.echo(f"{project} has no plan yet — run `ave edit` first")
+        raise typer.Exit(1)
+
+    stored = get_plan(row["id"], latest)
+    edl = EDL.model_validate(stored["edl"])
+    dna = edl.dna or default_dna()
+
+    result = apply_feedback(command, edl, dna)
+    if not result.ok:
+        typer.echo(f'not understood: "{command}"')
+        typer.echo("\ntry: faster / slower / punchier / reduce zooms by 50% / remove zooms")
+        raise typer.Exit(1)
+
+    change = result.changes[0]
+    typer.echo(f"v{latest:03d} -> v{latest + 1:03d}")
+    typer.echo(f"  {change.description}")
+
+    version = latest + 1
+    if change.kind == "replan":
+        # Where the cuts fall *is* the pacing, so this one cannot be a patch.
+        source = edl.all_clips()[0].source_path if edl.all_clips() else None
+        if not source or not Path(source).exists():
+            typer.echo("  source media is unavailable, cannot replan")
+            raise typer.Exit(1)
+        probed = probe(source)
+        probed["summary"] = summarise(probed)
+        dna = change.dna or dna
+        edl = plan_cut(
+            PlanInputs(
+                media_id=edl.all_clips()[0].source_media_id, path=source, probe=probed,
+                dna=dna, project=project, version=version, seed=edl.seed,
+            )
+        )
+        typer.echo("  (cuts recomputed)")
+    else:
+        edl.version = version
+        typer.echo("  (cuts preserved — this was a patch, not a re-plan)")
+
+    validation = validate_edl(edl, dna, autonomy=row["autonomy"])
+    if not validation.ok:
+        for clip_id, message in validation.clip_errors:
+            typer.echo(f"  ERROR  {clip_id}: {message}")
+        raise typer.Exit(1)
+
+    qc = run_qc(edl)
+    plan_id = save_plan(
+        project_id=row["id"], version=version, seed=edl.seed,
+        edl=edl.model_dump(mode="json"), qc=qc.to_dict(), origin="feedback",
+        origin_detail=command, run_id=get_run_id(), parent_version=latest,
+    )
+    if pending := edl.pending_approval():
+        save_approvals(plan_id, [op.model_dump(mode="json") for op in pending])
+
+    summary = edl.summary
+    typer.echo(
+        f"\n{summary.clip_count} clips  {summary.output_duration_s:.1f}s  "
+        f"({summary.kept_ratio:.0%} kept)"
+    )
+    typer.echo(qc.render())
+
+    if not qc.ok:
+        typer.echo("\nnot writing a timeline while there are errors")
+        raise typer.Exit(1)
+
+    out = config.BUILD_DIR / f"{project}_v{version:03d}.fcpxml"
+    write_fcpxml(edl, out)
+    typer.echo(f"\nwrote {out}")
+
+
+@app.command()
 def plans(project: str = typer.Argument(..., help="Project name.")) -> None:
     """List every version of a project's plan. Nothing is ever overwritten."""
     from ave.database.queries import get_project, list_plans

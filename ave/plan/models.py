@@ -29,6 +29,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from ave.style.models import EditDNA
+
 SCHEMA_VERSION = "1.0"
 
 Decision = Literal["ALLOW", "REQUIRE_APPROVAL", "DENY"]
@@ -152,6 +154,10 @@ class EDL(BaseModel):
     seed: int = 0
     style_name: str = "Default"
     dna_schema_version: str = "1.0"
+    #: The exact style this plan was built from. Carried rather than referenced by
+    #: name so a stored plan stays reproducible even after the style is edited —
+    #: "every version is preserved" is only true if the inputs are preserved too.
+    dna: EditDNA | None = None
     timebase: Timebase
     #: hash(footage + DNA + target). Same inputs and seed must give the same EDL.
     inputs_hash: str = ""

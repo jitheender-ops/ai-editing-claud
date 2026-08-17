@@ -4,14 +4,26 @@ Study a reference video, measure how it is edited, apply that style to your own
 footage, and build the result as a DaVinci Resolve timeline. Every decision is
 explainable and every version is kept.
 
-**Status: M1 complete — it edits.** Point it at a video and it produces a cut
-timeline that Resolve imports. Ingest, proxies, the analysis cache, the job
-queue, the Resolve capability probe, the nightly research bot, the cut planner,
-the operation validation gate, quality control and the FCPXML writer all work.
-88 tests, no network and no sleeping in any of them.
+**Status: the core loop is closed.** Measure a reference video's editing style,
+apply it to your footage, get a Resolve timeline, and adjust it in plain English
+— with every version preserved.
 
-Not yet: captions (M2), measuring a real reference video (M3), B-roll (M7).
-Cuts are driven by silence today; the transcript layer arrives with M3.
+```
+reference video -> Edit DNA -> style library -> your footage -> FCPXML -> Resolve
+                                                     ^                       |
+                                                     +---- "make it faster" -+
+```
+
+Working: ingest and proxies, the content-hash analysis cache, the durable job
+queue, the Resolve capability probe, the nightly research bot, shot detection,
+motion estimation, reference analysis into an Edit DNA, the style library, the
+silence-driven cut planner, punch-in generation, the operation validation gate,
+quality control, the FCPXML writer, and natural-language feedback. 134 tests,
+none touching the network and none sleeping.
+
+Not yet: captions, transcript-driven cuts, and B-roll — all three need
+transcription, which is the next dependency to take on. Cuts are driven by
+silence today.
 
 ## The three decisions that shape everything
 
@@ -39,12 +51,14 @@ answer "why is this cut here?" with a rule id and its inputs.
 ## Running it
 
 ```bash
-uv run ave doctor                      # what this machine can and cannot do
-uv run ave ingest ~/Movies/MyFootage   # index, hash, build 480p proxies
-uv run ave edit ~/Movies/talk.mov      # plan a cut and write a Resolve timeline
-uv run ave plans talk                  # every version, never overwritten
-uv run ave approvals                   # what the planner wasn't sure about
-uv run pytest -q                       # 88 tests
+uv run ave doctor                             # what this machine can and cannot do
+uv run ave ingest ~/Movies/MyFootage          # index, hash, build 480p proxies
+uv run ave reference ref.mp4 --name fast-tech # measure a style from a reference
+uv run ave edit talk.mov --style fast-tech    # apply it, write a Resolve timeline
+uv run ave tweak talk "reduce zooms by 50%"   # adjust, as a new version
+uv run ave plans talk                         # every version, never overwritten
+uv run ave approvals                          # what the planner wasn't sure about
+uv run pytest -q                              # 134 tests
 ```
 
 A real run:

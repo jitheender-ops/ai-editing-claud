@@ -173,6 +173,7 @@ def plan_cut(inputs: PlanInputs) -> EDL:
         seed=inputs.seed,
         style_name=dna.style_name,
         dna_schema_version=dna.schema_version,
+        dna=dna,
         timebase=timebase,
         inputs_hash=inputs_hash(inputs),
         tracks=[Track(name="V1", kind="video", clips=clips)],
