@@ -30,6 +30,8 @@ from ave.lib.ids import new_id
 from ave.lib.rng import rng
 from ave.media.ffmpeg import summarise
 from ave.media.silence import Range, detect_silence, measure_loudness, speech_ranges
+from ave.media.transcribe import Transcript
+from ave.plan.refine import refine
 from ave.plan.models import EDL, AudioFormat, Clip, Marker, Op, Summary, Timebase, Track
 from ave.style.models import EditDNA
 
@@ -46,6 +48,9 @@ class PlanInputs:
     version: int = 1
     seed: int = 0
     noise_db: float = -30.0
+    #: When present, cuts are refined against language rather than level alone.
+    transcript: Transcript | None = None
+    remove_fillers: bool = True
 
 
 def timebase_from_probe(probe: dict) -> Timebase:
@@ -104,6 +109,18 @@ def plan_cut(inputs: PlanInputs) -> EDL:
     )
     kept = [(s, e) for s, e in kept if e - s >= pacing.min_clip_duration_s]
 
+    # Silence knows where sound stops; only the transcript knows where language
+    # stops. Without it a cut lands wherever the level crossed a threshold, which
+    # is often mid-syllable.
+    refinement = refine(
+        kept,
+        inputs.transcript,
+        remove_fillers=inputs.remove_fillers,
+        min_duration_s=pacing.min_clip_duration_s,
+    )
+    kept = refinement.ranges
+    transcript_notes = refinement.notes
+
     # An empty plan is worthless without the reason. Measuring loudness costs an
     # extra ffmpeg pass, so it happens only on this failure path — where the
     # difference between "your audio is silent" and "your threshold is wrong" is
@@ -139,9 +156,14 @@ def plan_cut(inputs: PlanInputs) -> EDL:
         removed_before = start_s - (kept[index - 1][1] if index else 0.0)
         reason = (
             f"Kept {end_s - start_s:.2f}s of speech; "
-            f"{removed_before:.2f}s of silence removed before it "
+            f"{removed_before:.2f}s removed before it "
             f"(style dead-air tolerance {pacing.dead_air_tolerance_s:.2f}s)"
         )
+        if inputs.transcript:
+            spoken = _words_in(inputs.transcript, start_s, end_s)
+            if spoken:
+                reason += f'; says "{spoken}"'
+        
 
         clips.append(
             Clip(
@@ -187,7 +209,7 @@ def plan_cut(inputs: PlanInputs) -> EDL:
             output_duration_s=round(output_s, 3),
             clip_count=len(clips),
             removed_s=round(max(0.0, duration - output_s), 3),
-            diagnostics=diagnostics,
+            diagnostics=diagnostics + transcript_notes,
         ),
     )
     add_punch_ins(edl, dna, seed=inputs.seed)
@@ -258,6 +280,15 @@ def add_punch_ins(edl: EDL, dna: EditDNA, *, seed: int) -> int:
     return added
 
 
+def _words_in(transcript: Transcript, start: float, end: float, limit: int = 8) -> str:
+    """The opening words of a clip, so a plan is readable without scrubbing."""
+    inside = [w.text for w in transcript.words if w.start >= start - 0.01 and w.end <= end + 0.01]
+    if not inside:
+        return ""
+    head = " ".join(inside[:limit])
+    return head + ("..." if len(inside) > limit else "")
+
+
 def inputs_hash(inputs: PlanInputs) -> str:
     """Identifies the inputs that produced a plan.
 
@@ -272,6 +303,9 @@ def inputs_hash(inputs: PlanInputs) -> str:
         str(inputs.seed),
         PLANNER_VERSION,
         f"{inputs.noise_db}",
+        # A plan cut with a transcript differs from one cut without it, so the
+        # hash has to know which happened.
+        f"transcript={bool(inputs.transcript)}:fillers={inputs.remove_fillers}",
     ):
         digest.update(part.encode())
     return digest.hexdigest()

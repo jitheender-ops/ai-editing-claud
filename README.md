@@ -22,9 +22,12 @@ quality control, the FCPXML writer, style similarity scoring, the in-Resolve
 companion script, an FCP7 XML fallback, and natural-language feedback. 166 tests,
 none touching the network and none sleeping.
 
-Not yet: captions, transcript-driven cuts, and B-roll — all three need
-transcription, which is the next dependency to take on. Cuts are driven by
-silence today.
+Cuts are transcript-aware: fillers are excised, no cut lands mid-word, and cuts
+near a sentence end are pulled onto it. On a real clip, silence alone kept a
+fragment of an "um" as its own clip and truncated "dog" mid-word; with the
+transcript both are fixed.
+
+Not yet: captions and B-roll.
 
 ## The three decisions that shape everything
 
@@ -55,14 +58,14 @@ answer "why is this cut here?" with a rule id and its inputs.
 uv run ave doctor                             # what this machine can and cannot do
 uv run ave ingest ~/Movies/MyFootage          # index, hash, build 480p proxies
 uv run ave reference ref.mp4 --name fast-tech # measure a style from a reference
-uv run ave edit talk.mov --style fast-tech    # apply it, write a Resolve timeline
+uv run ave edit talk.mov --style fast-tech --transcribe   # apply it, write a Resolve timeline
 uv run ave tweak talk "reduce zooms by 50%"   # adjust, as a new version
 uv run ave compare fast-tech slow-doc         # how alike are two styles?
 uv run ave install-resolve-script             # tier 2: build from inside Resolve
 uv run ave plans talk                         # every version, never overwritten
 uv run ave approvals                          # what the planner wasn't sure about
 uv run ave edit talk.mov --format both        # FCPXML + FCP7 fallback
-uv run pytest -q                              # 166 tests
+uv run pytest -q                              # 227 tests
 ```
 
 A real run:

@@ -141,10 +141,15 @@ def edit(
     fmt: str = typer.Option(
         "fcpxml", "--format", help="fcpxml (default) | fcp7 (older, cruder, very well worn) | both"
     ),
+    transcribe_now: bool = typer.Option(
+        False, "--transcribe", help="Transcribe first if no transcript is cached."
+    ),
+    fillers: bool = typer.Option(True, help="Remove um/uh using the transcript."),
 ) -> None:
     """Plan a cut from silence, validate it, and write a Resolve-importable timeline."""
     from ave.database.queries import (
-        get_style, next_plan_version, save_approvals, save_plan, upsert_project,
+        get_analysis, get_style, next_plan_version, save_analysis, save_approvals,
+        save_plan, upsert_media, upsert_project,
     )
     from ave.executors.fcp7 import write_fcp7
     from ave.executors.fcpxml import write_fcpxml
@@ -179,10 +184,44 @@ def edit(
     probed = probe(path)
     probed["summary"] = summarise(probed)
 
+    # A transcript changes where cuts land, so it is used whenever one is already
+    # cached — recomputing is the expensive part, not using it.
+    from ave.media.transcribe import (
+        ANALYZER_VERSION as TRANSCRIPT_VERSION,
+        Transcript,
+        WhisperCppTranscriber,
+        available as transcribe_available,
+    )
+
+    digest = content_hash(path)
+    media_id, _ = upsert_media(
+        path=str(path), content_hash=digest, kind="source", probe=probed, proxy_path=None
+    )
+    cached = get_analysis(media_id, "transcript", TRANSCRIPT_VERSION)
+    transcript = Transcript.from_dict(cached["data"]) if cached else None
+
+    if transcript is None and transcribe_now:
+        ready, why = transcribe_available()
+        if not ready:
+            typer.echo(why)
+            raise typer.Exit(1)
+        typer.echo(f"transcribing {path.name} ...")
+        transcript = WhisperCppTranscriber().transcribe(path)
+        save_analysis(
+            media_id=media_id, kind="transcript",
+            analyzer_version=TRANSCRIPT_VERSION, data=transcript.to_dict(),
+        )
+
+    if transcript:
+        typer.echo(f"using transcript: {len(transcript.words)} words, "
+                   f"{len(transcript.fillers())} fillers")
+    else:
+        typer.echo("no transcript — cutting on silence alone (add --transcribe)")
+
     typer.echo(f"planning {path.name} with style '{dna.style_name}' ...")
     edl = plan_cut(
         PlanInputs(
-            media_id=content_hash(path),
+            media_id=digest,
             path=str(path),
             probe=probed,
             dna=dna,
@@ -190,6 +229,8 @@ def edit(
             version=version,
             seed=seed,
             noise_db=noise,
+            transcript=transcript,
+            remove_fillers=fillers,
         )
     )
 
