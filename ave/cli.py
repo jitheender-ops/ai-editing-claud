@@ -130,11 +130,15 @@ def edit(
     noise: float = typer.Option(-30.0, help="Silence threshold in dBFS. Lower = stricter."),
     seed: int = typer.Option(0, help="Seed. The same seed reproduces the plan exactly."),
     autonomy: int = typer.Option(2, help="1 propose | 2 build and flag | 3 autonomous"),
+    fmt: str = typer.Option(
+        "fcpxml", "--format", help="fcpxml (default) | fcp7 (older, cruder, very well worn) | both"
+    ),
 ) -> None:
     """Plan a cut from silence, validate it, and write a Resolve-importable timeline."""
     from ave.database.queries import (
         get_style, next_plan_version, save_approvals, save_plan, upsert_project,
     )
+    from ave.executors.fcp7 import write_fcp7
     from ave.executors.fcpxml import write_fcpxml
     from ave.executors.resolve_plan import write_plan
     from ave.media.ffmpeg import probe, summarise
@@ -214,11 +218,21 @@ def edit(
         typer.echo("\nnot writing a timeline while there are errors")
         raise typer.Exit(1)
 
-    out = config.BUILD_DIR / f"{name}_v{version:03d}.fcpxml"
-    write_fcpxml(edl, out)
+    stem = config.BUILD_DIR / f"{name}_v{version:03d}"
+    written = []
+    if fmt in ("fcpxml", "both"):
+        written.append(write_fcpxml(edl, stem.with_suffix(".fcpxml")))
+    if fmt in ("fcp7", "both"):
+        written.append(write_fcp7(edl, stem.with_suffix(".xml")))
+    if not written:
+        typer.echo(f"unknown --format {fmt!r}; expected fcpxml, fcp7 or both")
+        raise typer.Exit(1)
     write_plan(edl, config.BUILD_DIR / f"{name}_v{version:03d}.plan.json")
-    typer.echo(f"\nwrote {out}")
-    typer.echo("import it with:  Resolve -> File -> Import -> Timeline")
+
+    typer.echo("")
+    for item in written:
+        typer.echo(f"wrote {item}")
+    typer.echo("\nimport it with:  Resolve -> File -> Import -> Timeline")
     typer.echo("or, inside Resolve:  Workspace -> Scripts -> AVE_Build_Timeline")
 
 
