@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -52,6 +53,13 @@ def doctor() -> None:
             typer.echo(f"  {binary:<16} MISSING{'' if required else '  (optional)'}")
             if required:
                 ok = False
+
+    from ave.media.transcribe import available as transcribe_available
+
+    ready, why = transcribe_available()
+    typer.echo(f"  transcription    {'ready' if ready else 'unavailable'}")
+    if not ready:
+        typer.echo(f"    {why}")
 
     typer.echo("\nstorage")
     typer.echo(f"  home             {config.AVE_HOME}")
@@ -461,6 +469,193 @@ def compare_styles(
             "never measured hold the same defaults, so scoring them would report "
             "a similarity that means nothing."
         )
+
+
+@app.command("fetch-model")
+def fetch_model(
+    name: str = typer.Option("base.en", help="tiny.en | base.en | small.en | medium.en"),
+) -> None:
+    """Download a whisper.cpp model. Run once per machine."""
+    import urllib.request
+
+    filename = f"ggml-{name}.bin"
+    target = config.AVE_HOME / "models" / filename
+    if target.exists():
+        typer.echo(f"already have {target} ({target.stat().st_size / 1e6:.0f} MB)")
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    url = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{filename}"
+    typer.echo(f"downloading {filename} ...")
+    try:
+        urllib.request.urlretrieve(url, target)
+    except Exception as exc:  # noqa: BLE001
+        target.unlink(missing_ok=True)
+        typer.echo(f"download failed: {exc}")
+        raise typer.Exit(1)
+    typer.echo(f"saved {target} ({target.stat().st_size / 1e6:.0f} MB)")
+
+
+@app.command()
+def transcribe(
+    path: Path = typer.Argument(..., help="Media to transcribe."),
+    threads: int = typer.Option(None, help="CPU threads. Set this high on a desktop."),
+    words: bool = typer.Option(False, "--words", help="Print word-level timings."),
+    force: bool = typer.Option(False, "--force", help="Ignore the cache."),
+) -> None:
+    """Transcribe with word-level timestamps. Cached by content hash."""
+    from ave.database.queries import get_analysis, save_analysis, upsert_media
+    from ave.media.ffmpeg import probe, summarise
+    from ave.media.hash import content_hash
+    from ave.media.transcribe import ANALYZER_VERSION, Transcript, WhisperCppTranscriber, available
+
+    path = path.expanduser().resolve()
+    if not path.exists():
+        typer.echo(f"no such file: {path}")
+        raise typer.Exit(1)
+
+    ok, why = available()
+    if not ok:
+        typer.echo(why)
+        raise typer.Exit(1)
+
+    config.ensure_dirs()
+    get_db()
+
+    digest = content_hash(path)
+    probed = probe(path)
+    probed["summary"] = summarise(probed)
+    media_id, _ = upsert_media(
+        path=str(path), content_hash=digest, kind="source", probe=probed, proxy_path=None
+    )
+
+    cached = None if force else get_analysis(media_id, "transcript", ANALYZER_VERSION)
+    if cached:
+        transcript = Transcript.from_dict(cached["data"])
+        typer.echo("(cached)")
+    else:
+        typer.echo(f"transcribing {path.name} ...")
+        started = time.monotonic()
+        transcript = WhisperCppTranscriber(threads=threads).transcribe(path)
+        elapsed = time.monotonic() - started
+        save_analysis(
+            media_id=media_id, kind="transcript", analyzer_version=ANALYZER_VERSION,
+            data=transcript.to_dict(), duration_ms=int(elapsed * 1000),
+        )
+        duration = probed["summary"]["duration_s"] or 1
+        typer.echo(f"took {elapsed:.1f}s for {duration:.1f}s of audio ({duration / elapsed:.1f}x realtime)")
+
+    typer.echo("")
+    if words:
+        for word in transcript.words:
+            mark = "  <- filler" if word.is_filler else ""
+            typer.echo(f"  {word.start:7.2f}-{word.end:6.2f}  {word.text}{mark}")
+    else:
+        for segment in transcript.segments:
+            typer.echo(f"  [{segment.start:6.2f}] {segment.text}")
+
+    fillers = transcript.fillers()
+    typer.echo(f"\n{len(transcript.words)} words, {len(transcript.segments)} segments, "
+               f"{len(fillers)} fillers")
+
+
+@app.command("analysis-export")
+def analysis_export(
+    path: Path = typer.Argument(..., help="Media whose analysis should be exported."),
+    out: Path = typer.Option(None, "-o", help="Output JSON. Defaults to <name>.analysis.json"),
+) -> None:
+    """Export cached analysis for one file, for transfer to another machine.
+
+    The cache is keyed by content hash, not by path or machine, so a transcript
+    computed on a desktop is valid on the laptop for the same file. That is what
+    makes offloading work without any shared database.
+    """
+    import json
+
+    from ave.database.adapter import get_db as _db
+    from ave.media.hash import content_hash
+
+    path = path.expanduser().resolve()
+    if not path.exists():
+        typer.echo(f"no such file: {path}")
+        raise typer.Exit(1)
+
+    get_db()
+    digest = content_hash(path)
+    rows = _db().all(
+        """SELECT a.kind, a.analyzer_version, a.data, a.duration_ms
+           FROM analysis a JOIN media m ON m.id = a.media_id
+           WHERE m.content_hash = ?""",
+        digest,
+    )
+    if not rows:
+        typer.echo(f"no cached analysis for {path.name} — run `ave transcribe` first")
+        raise typer.Exit(1)
+
+    payload = {
+        "schema": "ave-analysis/1",
+        "content_hash": digest,
+        "source_name": path.name,
+        "entries": [
+            {"kind": r["kind"], "analyzer_version": r["analyzer_version"],
+             "data": json.loads(r["data"]), "duration_ms": r["duration_ms"]}
+            for r in rows
+        ],
+    }
+    target = out or Path(f"{path.stem}.analysis.json")
+    target.write_text(json.dumps(payload, indent=2))
+    typer.echo(f"wrote {target}  ({len(rows)} analyses for content {digest[:12]})")
+
+
+@app.command("analysis-import")
+def analysis_import(
+    payload_path: Path = typer.Argument(..., help="A file written by analysis-export."),
+    media: Path = typer.Option(None, help="The matching media file, if not yet indexed."),
+) -> None:
+    """Import analysis computed on another machine."""
+    import json
+
+    from ave.database.queries import get_media_by_hash, save_analysis, upsert_media
+    from ave.media.ffmpeg import probe, summarise
+    from ave.media.hash import content_hash
+
+    get_db()
+    payload = json.loads(payload_path.read_text())
+    if payload.get("schema") != "ave-analysis/1":
+        typer.echo(f"unrecognised schema: {payload.get('schema')}")
+        raise typer.Exit(1)
+
+    digest = payload["content_hash"]
+    row = get_media_by_hash(digest, "source")
+    if not row:
+        if not media or not media.exists():
+            typer.echo(
+                f"{payload['source_name']} is not indexed here. Pass --media <path> "
+                f"pointing at the same file, or run `ave ingest` on it first."
+            )
+            raise typer.Exit(1)
+        local = content_hash(media)
+        if local != digest:
+            # Refusing here is the point: silently attaching a transcript to the
+            # wrong footage would be near-impossible to notice later.
+            typer.echo(f"content mismatch — {media.name} is not the file this was computed from")
+            raise typer.Exit(1)
+        probed = probe(media)
+        probed["summary"] = summarise(probed)
+        media_id, _ = upsert_media(
+            path=str(media.resolve()), content_hash=digest, kind="source",
+            probe=probed, proxy_path=None,
+        )
+    else:
+        media_id = row["id"]
+
+    for entry in payload["entries"]:
+        save_analysis(
+            media_id=media_id, kind=entry["kind"],
+            analyzer_version=entry["analyzer_version"], data=entry["data"],
+            duration_ms=entry.get("duration_ms"),
+        )
+    typer.echo(f"imported {len(payload['entries'])} analyses for {payload['source_name']}")
 
 
 @app.command()

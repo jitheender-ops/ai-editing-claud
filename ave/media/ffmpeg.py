@@ -89,6 +89,10 @@ def summarise(probed: dict[str, Any]) -> dict[str, Any]:
         "video_codec": video.get("codec_name") if video else None,
         "audio_codec": audio.get("codec_name") if audio else None,
         "has_audio": audio is not None,
+        # Carried through to the timeline writers. Hardcoding stereo/48k here
+        # makes Resolve misread a mono 44.1k source, which is most screen capture.
+        "audio_channels": int(audio.get("channels") or 2) if audio else 2,
+        "audio_sample_rate": int(audio.get("sample_rate") or 48000) if audio else 48000,
         "size_bytes": int(fmt.get("size") or 0),
     }
 

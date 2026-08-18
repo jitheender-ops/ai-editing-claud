@@ -49,7 +49,7 @@ def rate_element(parent: ET.Element, timebase: Timebase) -> ET.Element:
 
 
 def _file_element(parent: ET.Element, clip: Clip, timebase: Timebase, file_id: str,
-                  defined: set[str], asset_frames: int) -> None:
+                  defined: set[str], asset_frames: int, channels: int = 2) -> None:
     """xmeml defines a file once, then refers to it by id alone.
 
     Re-emitting the full definition for every clip is not merely wasteful — some
@@ -75,7 +75,7 @@ def _file_element(parent: ET.Element, clip: Clip, timebase: Timebase, file_id: s
     ET.SubElement(characteristics, "width").text = str(timebase.width)
     ET.SubElement(characteristics, "height").text = str(timebase.height)
     audio = ET.SubElement(media, "audio")
-    ET.SubElement(audio, "channelcount").text = "2"
+    ET.SubElement(audio, "channelcount").text = str(channels)
 
 
 def _motion_filter(parent: ET.Element, scale_percent: float) -> None:
@@ -140,7 +140,7 @@ def to_fcp7(edl: EDL, *, sequence_name: str | None = None) -> str:
         ET.SubElement(item, "in").text = str(clip.source_in_frames)
         ET.SubElement(item, "out").text = str(clip.source_out_frames)
         _file_element(item, clip, timebase, file_ids[clip.source_path], defined,
-                      asset_frames[clip.source_path])
+                      asset_frames[clip.source_path], edl.audio_format.channels)
 
         for op in clip.ops:
             if op.type == "zoom" and op.applied:

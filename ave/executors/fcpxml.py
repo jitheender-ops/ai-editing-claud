@@ -94,8 +94,8 @@ def to_fcpxml(edl: EDL, *, event_name: str = "ave") -> str:
             hasAudio="1",
             format="r1",
             audioSources="1",
-            audioChannels="2",
-            audioRate="48000",
+            audioChannels=str(edl.audio_format.channels),
+            audioRate=str(edl.audio_format.sample_rate),
         )
         # as_uri() percent-encodes, which matters here: this project lives under a
         # path containing a space.
@@ -113,8 +113,8 @@ def to_fcpxml(edl: EDL, *, event_name: str = "ave") -> str:
         duration=frames_to_time(total, timebase),
         tcStart="0s",
         tcFormat="NDF",
-        audioLayout="stereo",
-        audioRate="48k",
+        audioLayout=edl.audio_format.layout,
+        audioRate=edl.audio_format.rate_label,
     )
     spine = ET.SubElement(sequence, "spine")
 

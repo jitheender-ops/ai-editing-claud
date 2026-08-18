@@ -61,6 +61,27 @@ class Timebase(BaseModel):
         return frames * self.fps_den / self.fps_num
 
 
+class AudioFormat(BaseModel):
+    """The source's real audio shape, carried to the writers.
+
+    Declaring stereo/48k for a mono 44.1k source — which most screen capture is —
+    makes Resolve interpret the audio wrongly on import. So these are probed, not
+    assumed.
+    """
+
+    channels: int = Field(default=2, ge=1)
+    sample_rate: int = Field(default=48000, gt=0)
+
+    @property
+    def layout(self) -> str:
+        return {1: "mono", 2: "stereo"}.get(self.channels, "stereo")
+
+    @property
+    def rate_label(self) -> str:
+        """FCPXML writes rates as '44.1k' / '48k', not as a raw integer."""
+        return f"{self.sample_rate / 1000:g}k"
+
+
 class OpReason(BaseModel):
     check: Check
     decision: Decision
@@ -159,6 +180,7 @@ class EDL(BaseModel):
     #: "every version is preserved" is only true if the inputs are preserved too.
     dna: EditDNA | None = None
     timebase: Timebase
+    audio_format: AudioFormat = Field(default_factory=AudioFormat)
     #: hash(footage + DNA + target). Same inputs and seed must give the same EDL.
     inputs_hash: str = ""
     tracks: list[Track] = Field(default_factory=list)

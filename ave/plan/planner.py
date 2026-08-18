@@ -30,7 +30,7 @@ from ave.lib.ids import new_id
 from ave.lib.rng import rng
 from ave.media.ffmpeg import summarise
 from ave.media.silence import Range, detect_silence, measure_loudness, speech_ranges
-from ave.plan.models import EDL, Clip, Marker, Op, Summary, Timebase, Track
+from ave.plan.models import EDL, AudioFormat, Clip, Marker, Op, Summary, Timebase, Track
 from ave.style.models import EditDNA
 
 PLANNER_VERSION = "1.0"
@@ -175,6 +175,10 @@ def plan_cut(inputs: PlanInputs) -> EDL:
         dna_schema_version=dna.schema_version,
         dna=dna,
         timebase=timebase,
+        audio_format=AudioFormat(
+            channels=info.get("audio_channels", 2),
+            sample_rate=info.get("audio_sample_rate", 48000),
+        ),
         inputs_hash=inputs_hash(inputs),
         tracks=[Track(name="V1", kind="video", clips=clips)],
         markers=markers,

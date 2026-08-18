@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='utf-8'?>
+<fcpxml version="1.11">
+  <resources>
+    <format height="360" id="r1" colorSpace="1-1-1 (Rec. 709)" name="FFVideoFormatRateUndefined" width="640" frameDuration="1/30s" />
+    <asset audioSources="1" format="r1" duration="300/30s" id="r2" audioChannels="1" hasAudio="1" start="0s" name="speech_demo" hasVideo="1">
+      <media-rep src="file:///private/tmp/claude-501/-Users-jitheendermanapuram-hh-goa-passport/7c9cecfb-177d-490f-9d07-5748b8814e6f/scratchpad/speech_demo.mp4" kind="original-media" />
+    </asset>
+  </resources>
+  <library>
+    <event name="Auto-Editor Media Group">
+      <project name="speech_demo">
+        <sequence tcStart="0s" format="r1" tcFormat="NDF" audioLayout="mono" audioRate="44.1k">
+          <spine>
+            <asset-clip offset="0s" duration="67/30s" tcFormat="NDF" start="0s" name="speech_demo" ref="r2" />
+            <asset-clip offset="67/30s" duration="73/30s" tcFormat="NDF" start="114/30s" name="speech_demo" ref="r2" />
+            <asset-clip offset="140/30s" duration="66/30s" tcFormat="NDF" start="234/30s" name="speech_demo" ref="r2" />
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
