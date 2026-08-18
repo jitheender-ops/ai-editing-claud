@@ -18,7 +18,8 @@ Working: ingest and proxies, the content-hash analysis cache, the durable job
 queue, the Resolve capability probe, the nightly research bot, shot detection,
 motion estimation, reference analysis into an Edit DNA, the style library, the
 silence-driven cut planner, punch-in generation, the operation validation gate,
-quality control, the FCPXML writer, and natural-language feedback. 134 tests,
+quality control, the FCPXML writer, style similarity scoring, the in-Resolve
+companion script, and natural-language feedback. 155 tests,
 none touching the network and none sleeping.
 
 Not yet: captions, transcript-driven cuts, and B-roll — all three need
@@ -56,9 +57,11 @@ uv run ave ingest ~/Movies/MyFootage          # index, hash, build 480p proxies
 uv run ave reference ref.mp4 --name fast-tech # measure a style from a reference
 uv run ave edit talk.mov --style fast-tech    # apply it, write a Resolve timeline
 uv run ave tweak talk "reduce zooms by 50%"   # adjust, as a new version
+uv run ave compare fast-tech slow-doc      # how alike are two styles?
+uv run ave install-resolve-script             # tier 2: build from inside Resolve
 uv run ave plans talk                         # every version, never overwritten
 uv run ave approvals                          # what the planner wasn't sure about
-uv run pytest -q                              # 134 tests
+uv run pytest -q                              # 155 tests
 ```
 
 A real run:

@@ -409,6 +409,46 @@ def install_resolve_script() -> None:
     typer.echo("it builds the newest plan as a NEW timeline; existing ones are untouched.")
 
 
+@app.command("compare")
+def compare_styles(
+    left: str = typer.Argument(..., help="First style name."),
+    right: str = typer.Argument(..., help="Second style name."),
+    detail: bool = typer.Option(False, "--detail", help="Show per-field numbers."),
+) -> None:
+    """Score how alike two styles are, section by section."""
+    from ave.database.queries import get_style
+    from ave.style.compare import compare
+    from ave.style.models import EditDNA
+
+    get_db()
+    rows = {}
+    for name in (left, right):
+        row = get_style(name)
+        if not row:
+            typer.echo(f"unknown style: {name}  (try `ave styles`)")
+            raise typer.Exit(1)
+        rows[name] = EditDNA.model_validate(row["dna"])
+
+    report = compare(rows[left], rows[right])
+    typer.echo(f"{left}  vs  {right}\n")
+    typer.echo(report.render())
+
+    if detail:
+        typer.echo("")
+        for section in report.sections:
+            if section.detail:
+                typer.echo(f"  {section.name}")
+                for line in section.detail:
+                    typer.echo(f"    {line}")
+
+    if report.overall is None:
+        typer.echo(
+            "\nNeither style has enough measured to compare. Sections that were "
+            "never measured hold the same defaults, so scoring them would report "
+            "a similarity that means nothing."
+        )
+
+
 @app.command()
 def plans(project: str = typer.Argument(..., help="Project name.")) -> None:
     """List every version of a project's plan. Nothing is ever overwritten."""
